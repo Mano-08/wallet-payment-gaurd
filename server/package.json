@@ -1,0 +1,10 @@
+{
+  "type": "module",
+  "dependencies": {
+    "@lighthouse-web3/sdk": "^0.4.0",
+    "dotenv": "^16.5.0",
+    "x402-axios": "^0.1.0",
+    "express": "^5.1.0",
+    "viem": "^2.31.3"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "wordpress-mcp",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.13.0",
+    "uuid": "^11.1.0",
+    "x402-express": "^0.4.0",
+    "zod": "^3.25.67"
+  }
+}
