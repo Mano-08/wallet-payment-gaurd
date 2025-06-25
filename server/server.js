@@ -17,7 +17,7 @@ const lighthouseApiKey = process.env.LIGHTHOUSE_API_KEY;
 const geminiApiKey = process.env.GEMINI_API_KEY;
 
 const tools = new Map();
-
+let mcpServerConnected = false;
 
 // MCP Server
 const server = new McpServer({
@@ -60,7 +60,9 @@ ${blogContent}
 
     if (!response.ok) {
       console.error("Gemini API Error Response:", await response.text());
-      throw new Error(`Gemini API request failed with status ${response.status}`);
+      throw new Error(
+        `Gemini API request failed with status ${response.status}`
+      );
     }
 
     const data = await response.json();
@@ -80,25 +82,43 @@ ${blogContent}
 
 function addDynamicTool(name, description, content) {
   tools.set(name, { description, content });
+  console.log(`Tool ${name} stored with description: ${description}`);
 
-  server.tool(
-    name,
-    description,
-    {
-      name: z.string().describe(`regarding ${name}, ${description}`),
-    },
-    async ({ name }) => ({
-      content: [
+  // If MCP server is already connected, we can't add new tools
+  // You'll need to implement a restart mechanism or store tools for next restart
+  if (mcpServerConnected) {
+    console.warn(
+      `Tool ${name} stored but MCP server already connected. Tool will be available after restart.`
+    );
+  }
+}
+
+// Register all stored tools before connecting to MCP
+function registerStoredTools() {
+  for (const [name, toolData] of tools.entries()) {
+    try {
+      server.tool(
+        name,
+        toolData.description,
         {
-          type: "text",
-          text: name + " " + content,
+          name: z
+            .string()
+            .describe(`regarding ${name}, ${toolData.description}`),
         },
-      ],
-    })
-  );
-
-
-  console.log(`Tool ${name} added ${description} successfully and the content is ${content}`);
+        async ({ name }) => ({
+          content: [
+            {
+              type: "text",
+              text: name + " " + toolData.content,
+            },
+          ],
+        })
+      );
+      console.log(`MCP Tool ${name} registered successfully`);
+    } catch (error) {
+      console.error(`Failed to register tool ${name}:`, error);
+    }
+  }
 }
 
 app.post("/api/send", async (req, res) => {
@@ -111,12 +131,18 @@ app.post("/api/send", async (req, res) => {
 
   try {
     console.log("Uploading content to Lighthouse...");
-    const lighthouseResponse = await lighthouse.uploadText(blogContent, lighthouseApiKey, wallet_address);
+    const lighthouseResponse = await lighthouse.uploadText(
+      blogContent,
+      lighthouseApiKey,
+      wallet_address
+    );
     console.log("Lighthouse response:", lighthouseResponse);
 
     console.log("Generating summary with AI...");
     const hash = lighthouseResponse.data.Hash;
-    const fetchResponse = await fetch(`https://gateway.lighthouse.storage/ipfs/${hash}`);
+    const fetchResponse = await fetch(
+      `https://gateway.lighthouse.storage/ipfs/${hash}`
+    );
     const text = await fetchResponse.text();
     console.log("Blog Content:", text);
     const { toolName, summary } = await getSummariesFromAI(text);
@@ -124,16 +150,35 @@ app.post("/api/send", async (req, res) => {
     const toolDescription = summary || `Tutorial: ${title || toolName}`;
     addDynamicTool(toolName, toolDescription, text);
 
+    await restartMcpServer();
+
     res.status(200).json({
-      message: "Content monetized and tool created successfully!",
+      message:
+        "Content monetized and tool created successfully! Tool will be available after MCP server restart.",
       toolName: toolName,
       lighthouseHash: lighthouseResponse.data.Hash,
+      note: "MCP tools require server restart to be registered",
     });
   } catch (error) {
     console.error("Error in /api/send:", error);
     res.status(500).json({ message: "An internal server error occurred." });
   }
 });
+
+async function restartMcpServer() {
+  if (mcpServerConnected) {
+    await server.close();
+    mcpServerConnected = false;
+  }
+
+  // Re-register all tools (including the new one)
+  registerStoredTools();
+
+  // Reconnect
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  mcpServerConnected = true;
+}
 
 app.get("/api/tools", (req, res) => {
   const toolList = Array.from(tools.entries()).map(([name, toolData]) => ({
@@ -144,16 +189,45 @@ app.get("/api/tools", (req, res) => {
   res.status(200).json(toolList);
 });
 
+// Add endpoint to restart MCP server with new tools
+app.post("/api/restart-mcp", async (req, res) => {
+  try {
+    if (mcpServerConnected) {
+      await server.close();
+      mcpServerConnected = false;
+    }
+
+    // Re-register all tools
+    registerStoredTools();
+
+    // Reconnect
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    mcpServerConnected = true;
+
+    res.status(200).json({ message: "MCP server restarted with new tools" });
+  } catch (error) {
+    console.error("Error restarting MCP server:", error);
+    res.status(500).json({ message: "Failed to restart MCP server" });
+  }
+});
+
 app.listen(3000, async () => {
   console.log("Server is running on port 3000");
 });
 
-
-
 async function main() {
- const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("MCP Server running on stdio");
+  try {
+    // Register any existing tools first
+    registerStoredTools();
+
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    mcpServerConnected = true;
+    console.error("MCP Server running on stdio");
+  } catch (error) {
+    console.error("Failed to start MCP server:", error);
+  }
 }
 
 main().catch((error) => {
